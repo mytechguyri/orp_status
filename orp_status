@@ -1,0 +1,136 @@
+#!/usr/bin/python
+#
+# Copyright (c) 2019 John Tetreault (WA1OKB)
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+
+# This is designed to work with the PiOLED 128x32 from Adafruit Industries.
+# For use with other types or sizes of screen, modifications may be necessary.
+
+import sys
+import subprocess
+import os.path
+import time
+import os
+import Adafruit_SSD1306
+import RPi.GPIO as GPIO
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFont
+
+Farenheit = None
+#Farenheit = True   #System default is temp in Celcius, uncomment this line if you want Farenheit
+
+#Get GPIO pins and callsign from svxlink.conf
+svxlinkvars = {}
+with open("/etc/svxlink/svxlink.conf") as myfile:
+	for line in myfile:
+		name, var = line.partition("=")[::2]
+		svxlinkvars[name.strip()] = var[:-1]
+COS_Pin = int(svxlinkvars["GPIO_SQL_PIN"][4:])
+PTT_Pin = int(svxlinkvars["PTT_PIN"][4:])
+repeater_id = svxlinkvars["CALLSIGN"]+"-R"
+
+# Raspberry Pi OLED pin configuration:
+RST = None  # on the PiOLED this pin isnt used
+
+# 128x32 display with hardware I2C:
+disp = Adafruit_SSD1306.SSD1306_128_32(rst=RST)
+disp.begin()
+disp.clear()
+disp.display()
+padding = -2
+top = padding
+bottom = height = padding
+x = 0
+
+# Display OpenRepeater Logo Splashscreen 
+image = Image.open('/var/lib/orp_status/ORPLogo.png').convert('1')
+disp.image(image)
+disp.display()
+time.sleep(5)
+
+# Load font
+font = ImageFont.truetype("/var/lib/orp_status/slkscr.ttf", 8)
+width = 128
+height = 32
+image = Image.new('1', (width, height))
+draw = ImageDraw.Draw(image)
+
+while True:
+    #Draw a black filled box to clear the image.
+    draw.rectangle((0, 0, width, height), outline=0, fill=0)
+
+    try:
+	#Get Raspberry PI system stats
+        cmd = "top -bn1 | grep load | awk '{printf \"CPU Load: %.2f\", $(NF-2)}'"
+        CPU = subprocess.check_output(cmd, shell = True )
+        cmd = "free -m | awk 'NR==2{printf \"Mem: %s/%sMB %.2f%%\", $3,$2,$3*100/$2 }'"
+        MemUsage = subprocess.check_output(cmd, shell = True )
+        cmd = "df -h | awk '$NF==\"/\"{printf \"Disk: %d/%dGB %s\", $3,$2,$5}'"
+        Disk = subprocess.check_output(cmd, shell = True )
+        cmd = "vcgencmd measure_temp"
+	if Farenheit:
+		Temp = str(round(float(subprocess.check_output(cmd, shell = True)[5:-3]) * 1.8 + 32,1)) + u'\N{DEGREE SIGN}'
+	else:
+		Temp = str(round(float(subprocess.check_output(cmd, shell = True)[5:-3]),1)) + u'\N{DEGREE SIGN}'
+
+	#Get SvxLink Status
+	GPIO.setup(COS_Pin,GPIO.IN)
+	if GPIO.input(COS_Pin):
+		COS = " COS"
+	else:
+		COS = " RX "
+	#We have to use a different method for the PTT pin because
+	#the RPi.GPIO library only reads the Pi's standard GPIO pins
+        cmd = "cat /sys/class/gpio/gpio" + str(PTT_Pin) + "/value"
+	try:
+		if not os.path.exists('/sys/class/gpio/gpio' + str(PTT_Pin) + '/value'):
+			GPIOPTT = 0
+                else:
+			GPIOPTT = int(subprocess.check_output(cmd, shell = True))
+ 	except:
+		pass
+
+	if GPIOPTT:
+		PTT = " TX"
+	else:
+		PTT = "   "
+        STAT = os.system('service svxlink status > /dev/null')
+        if STAT == 0:
+        	STATUS = "Online"
+        else:
+		STATUS = " Down "
+
+    except:
+        #Redisplay the OpenRepeater Logo on shutdown
+        image = Image.open('/var/lib/orp_status/ORPLogo.png').convert('1')
+        disp.image(image)
+        disp.display()
+	sys.exit(0)
+
+    #Display the stats on the screen
+    draw.text((x, top), str(repeater_id) + ": " + str(STATUS) + str(COS) + str(PTT), font=font, fill=255)
+    draw.text((x, top+8),     str(CPU) + "% " + Temp, font=font, fill=255)
+    draw.text((x, top+16),    str(MemUsage),  font=font, fill=255)
+    draw.text((x, top+24),    str(Disk),  font=font, fill=255)
+    disp.image(image)
+    disp.display()
+
