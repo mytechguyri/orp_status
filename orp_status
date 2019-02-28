@@ -118,6 +118,8 @@ while True:
         	STATUS = "Online"
         else:
 		STATUS = " Down "
+		COS = "    "
+		PTT = "   "
 
     except:
         #Redisplay the OpenRepeater Logo on shutdown
